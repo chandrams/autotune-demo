@@ -104,11 +104,11 @@ def main(argv):
 
     # Dump the results & recommendations into json files
     with open('recommendations_data.json', 'w') as f:
-        json.dump(recommendations_json_arr, f)
+        json.dump(recommendations_json_arr, f, indent=4)
 
     list_exp_json = list_experiments()
     with open('usage_data.json', 'w') as f:
-        json.dump(list_exp_json, f)
+        json.dump(list_exp_json, f, indent=4)
 
 
 if __name__ == '__main__':
