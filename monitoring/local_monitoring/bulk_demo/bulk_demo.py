@@ -64,6 +64,25 @@ def main(argv):
     metric_profile_json_file = "./autotune/manifests/autotune/performance-profiles/resource_optimization_local_monitoring.json"
     create_metric_profile(metric_profile_json_file)
 
+    # List Data sources to validate if the datasource is registered with Kruize
+    print("\n#######################################")
+    print("List datasources registered with Kruize")
+    print("#######################################\n")
+    response = list_datasources()
+    datasource_json = response.json()
+    if datasource_json['datasources'][0]['name'] == "":
+        print("Datasource registration failed!")
+        sys.exit(1)
+
+    print("\n#######################################")
+    print("Import metadata from the datasource")
+    print("#######################################\n")
+    metadata_json_file = "./import_metadata.json"
+    response = import_metadata(metadata_json_file)
+    metadata_json = response.json()
+    if metadata_json['datasources']['prometheus-1']['datasource_name'] == "":
+        print("Importing metadata from the datasource failed!")
+        sys.exit(1)
 
     # Invoke the bulk service with the specified json
     print("\n#######################################")
