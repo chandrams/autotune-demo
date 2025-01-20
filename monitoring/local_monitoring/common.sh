@@ -362,6 +362,24 @@ function kruize_local_demo_setup() {
 			kind_start
 			prometheus_install
 			echo "✅ Installation of kind and prometheus complete!"
+			
+			if [ "${thanos}" == "1" ]; then
+				echo -n "🔄 Setting up Thanos & TSDB blocks...Please wait"
+				thanos_setup "${minio_url}" &
+				thanos_pid=$!
+				while kill -0 $thanos_pid 2>/dev/null;
+		 		do
+					echo -n "."
+					sleep 10
+				done
+				wait $thanos_pid
+				status=$?
+				if [ ${status} -ne 0 ]; then
+					#echo "For detailed logs, look in ${LOG_FILE}"
+					exit 1
+				fi
+				echo "✅ Done!"
+			fi
 		fi
 	elif [[ ${env_setup} -eq 0 ]]; then
 		if [ ${CLUSTER_TYPE} == "minikube" ]; then
@@ -398,7 +416,27 @@ function kruize_local_demo_setup() {
 	}
 	fi
 
-	kruize_local_patch >> "${LOG_FILE}" 2>&1
+	if [ "${thanos}" == "1" ]; then
+		echo -n "Updating thanos datasource in manifests..." >> "${LOG_FILE}" 2>&1
+		if [ ${CLUSTER_TYPE} == "kind" ]; then
+			CRC_DIR="${current_dir}/autotune/manifests/crc/default-db-included-installation"
+	
+		        KRUIZE_CRC_DEPLOY_MANIFEST_MINIKUBE="${CRC_DIR}/minikube/kruize-crc-minikube.yaml"
+		        KRUIZE_CRC_DEPLOY_MANIFEST_MINIKUBE_ORIG="${CRC_DIR}/minikube/kruize-crc-minikube.yaml.orig"
+
+			cp "${KRUIZE_CRC_DEPLOY_MANIFEST_MINIKUBE}" "${KRUIZE_CRC_DEPLOY_MANIFEST_MINIKUBE_ORIG}"
+		elif [ ${CLUSTER_TYPE} == "openshift" ]; then
+			CRC_DIR="${current_dir}/autotune/manifests/crc/default-db-included-installation"
+	
+		        KRUIZE_CRC_DEPLOY_MANIFEST_OPENSHIFT="${CRC_DIR}/openshift/kruize-crc-openshift.yaml"
+		        KRUIZE_CRC_DEPLOY_MANIFEST_OPENSHIFT_ORIG="${CRC_DIR}/openshift/kruize-crc-openshift.yaml.orig"
+
+			cp "${KRUIZE_CRC_DEPLOY_MANIFEST_OPENSHIFT}" "${KRUIZE_CRC_DEPLOY_MANIFEST_OPENSHIFT_ORIG}"
+		fi
+		kruize_local_thanos_patch "${ds_url}" >> "${LOG_FILE}" 2>&1
+	else
+		kruize_local_patch >> "${LOG_FILE}" 2>&1
+	fi
 
 	echo -n "🔄 Installing kruize! Please wait..."
 	kruize_start_time=$(get_date)
@@ -465,6 +503,25 @@ function kruize_local_demo_setup() {
 		kruize_bulk
 		recomm_end_time=$(get_date)
 	fi
+	
+	
+	if [ "${thanos}" == "1" ]; then
+		if [ ${CLUSTER_TYPE} == "kind" ]; then
+			CRC_DIR="${current_dir}/autotune/manifests/crc/default-db-included-installation"
+	
+		        KRUIZE_CRC_DEPLOY_MANIFEST_MINIKUBE="${CRC_DIR}/minikube/kruize-crc-minikube.yaml"
+		        KRUIZE_CRC_DEPLOY_MANIFEST_MINIKUBE_ORIG="${CRC_DIR}/minikube/kruize-crc-minikube.yaml.orig"
+
+			cp "${KRUIZE_CRC_DEPLOY_MANIFEST_MINIKUBE_ORIG}" "${KRUIZE_CRC_DEPLOY_MANIFEST_MINIKUBE}"
+		elif [ ${CLUSTER_TYPE} == "openshift" ]; then
+			CRC_DIR="${current_dir}/autotune/manifests/crc/default-db-included-installation"
+	
+		        KRUIZE_CRC_DEPLOY_MANIFEST_OPENSHIFT="${CRC_DIR}/openshift/kruize-crc-openshift.yaml"
+		        KRUIZE_CRC_DEPLOY_MANIFEST_OPENSHIFT_ORIG="${CRC_DIR}/openshift/kruize-crc-openshift.yaml.orig"
+
+			cp "${KRUIZE_CRC_DEPLOY_MANIFEST_OPENSHIFT_ORIG}" "${KRUIZE_CRC_DEPLOY_MANIFEST_OPENSHIFT}"
+		fi
+	fi		
 	
 	if [ "${vpa_install_required:-}" == "1" ]; then
 	{
@@ -579,3 +636,98 @@ sed -i \
 
 }
 
+function install_thanos_operator() {
+	THANOS_IMG="quay.io/thanos/thanos-operator:main-2025-01-16-a6585b6"
+
+	rm -rf thanos-operator
+	git clone https://github.com/thanos-community/thanos-operator.git
+        pushd thanos-operator > /dev/null
+	        echo "***********************************"
+        	echo "Install Thanos CRDS"
+	        echo "***********************************"
+        	make install
+		sleep 10
+	        kubectl get crds -n thanos-operator
+		
+          
+        	echo "***********************************"
+	        echo "Install Thanos operator"
+        	echo "***********************************"
+	        make deploy IMG="${THANOS_IMG}"
+		sleep 60
+        	kubectl get pods -n thanos-operator-system
+          
+	        echo "***********************************"
+        	echo "Install Thanos components"
+	        echo "***********************************"
+        	make install-example
+		sleep 120
+	        kubectl get pods -n thanos-operator-system
+
+		if [ ${CLUSTER_TYPE} == "kind" ]; then
+        		echo "***********************************"
+	        	echo "Port-forward the Thanos components"
+		        echo "***********************************"
+			kubectl -n thanos-operator-system port-forward svc/thanos-query-frontend-example-query 9090:9090  > /dev/null 2>&1 &
+			sleep 5
+	        	kubectl -n thanos-operator-system port-forward svc/minio 9000:9000 > /dev/null 2>&1 &
+	        	ps -ef | grep kubectl
+		elif [ ${CLUSTER_TYPE} == "openshift" ]; then
+        		echo "***********************************"
+		        echo "Expose Thanos frontend & minio components"
+		        echo "***********************************"
+			oc expose -n thanos-operator-system svc/thanos-query-frontend-example-query
+		        oc expose -n thanos-operator-system svc/minio
+			oc get route -n thanos-operator-system
+		fi
+	popd > /dev/null
+}
+
+function cleanup_thanos_operator() {
+	echo ""
+	echo "Cleaning up Thanos operator..."
+	echo ""
+	pushd thanos-operator > /dev/null
+	        make uninstall
+		make undeploy
+		sleep 10
+	popd > /dev/null
+}
+
+function create_tsdb_blocks() {
+	echo "***********************************"
+        echo "Creating TSDB blocks"
+        echo "***********************************"
+	rm -rf thanosbench
+        git clone -b kruize_profile https://github.com/chandrams/thanosbench.git
+	pushd thanosbench > /dev/null
+	        make build
+        	maxtime=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
+	        echo "${maxtime}"
+		rm -rf "${HOME}/tsdb"
+        	echo " ./thanosbench block plan -p kruize-1d-tiny --max-time="${maxtime}" | ./thanosbench block gen --workers=20 --output.dir=${HOME}/tsdb"
+	        ./thanosbench block plan -p kruize-1d-tiny --max-time="${maxtime}" | ./thanosbench block gen --workers=20 --output.dir=${HOME}/tsdb
+        	ls ${HOME}/tsdb
+	popd > /dev/null
+}
+
+function copy_tsdb_blocks_to_minio() {
+	minio_url=$1
+	echo "***********************************"
+	echo "Copying TSDB blocks to minio"
+      	echo "***********************************"
+        curl https://dl.min.io/client/mc/release/linux-amd64/mc --create-dirs -o ${HOME}/mc
+        chmod +x ${HOME}/mc
+        export PATH=$PATH:${HOME}
+        echo "mc alias set myminio ${minio_url} thanos thanos-secret"
+        mc alias set myminio "${minio_url}" thanos thanos-secret
+        mc cp -r ${HOME}/tsdb/* myminio/thanos
+	rm -rf "${HOME}/tsdb"
+}
+
+function thanos_setup() {
+	minio_url=$1
+	install_thanos_operator >> "${LOG_FILE}" 2>&1
+	create_tsdb_blocks >> "${LOG_FILE}" 2>&1
+	copy_tsdb_blocks_to_minio "${minio_url}" >> "${LOG_FILE}" 2>&1
+}

@@ -127,18 +127,21 @@ def bulk_status(job_id):
 
 def main(argv):
     cluster_type = "minikube"
+    thanos = 0
 
     try:
-        opts, args = getopt.getopt(argv, "h:c:d:")
+        opts, args = getopt.getopt(argv, "h:c:z:")
     except getopt.GetoptError:
-        print("bulk_demo.py -c <cluster type>")
+        print("bulk_demo.py -c <cluster type> -z <register_thanos> default - 0, set to 1 to register thanos datasource")
         sys.exit(2)
     for opt, arg in opts:
         if opt == '-h':
-            print("bulk_demo.py -c <cluster type>")
+            print("bulk_demo.py -c <cluster type> -z <register_thanos>")
             sys.exit()
         elif opt == '-c':
             cluster_type = arg
+        elif opt == '-z':
+            thanos = int(arg)
 
     with open(log_file, "a") as log:
         with redirect_stdout(log):
@@ -154,6 +157,8 @@ def main(argv):
           print("Invoking bulk service")
           print("#######################################\n")
           bulk_json_file = "bulk_input.json"
+          if thanos == 1:
+            bulk_json_file = "bulk_input_thanos.json"
           response = bulk(bulk_json_file)
           # Obtain the job id from the response from bulk service
           job_id_json = response.json()

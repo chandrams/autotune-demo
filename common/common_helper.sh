@@ -650,6 +650,34 @@ function kruize_local_patch() {
 	popd >/dev/null
 }
 
+function kruize_local_thanos_patch() {
+	ds_url=$1
+        CRC_DIR="./manifests/crc/default-db-included-installation"
+	KRUIZE_CRC_DEPLOY_MANIFEST_MINIKUBE="${CRC_DIR}/minikube/kruize-crc-minikube.yaml"
+        KRUIZE_CRC_DEPLOY_MANIFEST_OPENSHIFT="${CRC_DIR}/openshift/kruize-crc-openshift.yaml"
+
+	pushd autotune >/dev/null
+		# Checkout mvp_demo to get the latest mvp_demo release version
+		git checkout mvp_demo >/dev/null 2>/dev/null
+		if [ ${CLUSTER_TYPE} == "kind" ]; then
+			sed -i 's/"name": "prometheus-1"/"name": "thanos"/' ${KRUIZE_CRC_DEPLOY_MANIFEST_MINIKUBE}
+			sed -i 's/"serviceName": "prometheus-k8s"/"serviceName": ""/' ${KRUIZE_CRC_DEPLOY_MANIFEST_MINIKUBE}
+			sed -i 's/"namespace": "monitoring"/"namespace": ""/' ${KRUIZE_CRC_DEPLOY_MANIFEST_MINIKUBE}
+			sed -i 's#"url": ""#"url": "'"${ds_url}"'"#' ${KRUIZE_CRC_DEPLOY_MANIFEST_MINIKUBE}
+
+		elif [ ${CLUSTER_TYPE} == "openshift" ]; then
+        		sed -i 's/"name": "prometheus-1"/"name": "thanos"/' ${KRUIZE_CRC_DEPLOY_MANIFEST_OPENSHIFT}
+			sed -i 's/"serviceName": "prometheus-k8s"/"serviceName": ""/' ${KRUIZE_CRC_DEPLOY_MANIFEST_OPENSHIFT}
+			sed -i 's/"namespace": "openshift-monitoring"/"namespace": ""/' ${KRUIZE_CRC_DEPLOY_MANIFEST_OPENSHIFT}
+			sed -i 's#"url": ""#"url": "'"${ds_url}"'"#' ${KRUIZE_CRC_DEPLOY_MANIFEST_OPENSHIFT}
+	
+        		sed -i 's/\([[:space:]]*\)\(storage:\)[[:space:]]*[0-9]\+Mi/\1\2 1Gi/' ${KRUIZE_CRC_DEPLOY_MANIFEST_OPENSHIFT}
+	        	sed -i 's/\([[:space:]]*\)\(memory:\)[[:space:]]*".*"/\1\2 "2Gi"/; s/\([[:space:]]*\)\(cpu:\)[[:space:]]*".*"/\1\2 "2"/' ${KRUIZE_CRC_DEPLOY_MANIFEST_OPENSHIFT}
+		fi
+	popd >/dev/null
+}
+
+
 
 ###########################################
 #  Get URLs
